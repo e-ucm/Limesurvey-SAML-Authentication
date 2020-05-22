@@ -171,8 +171,9 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             if ($sessionCleanupNeeded && $sessionCleanupRequired) {
                 \SimpleSAML\Session::getSessionFromRequest()->cleanup();
             }
+
+            $this->setUsername($sUser);
             $this->setAuthPlugin();
-            $this->newUserSession();
         } else {
             if ($sessionCleanupNeeded && $sessionCleanupRequired) {
                 \SimpleSAML\Session::getSessionFromRequest()->cleanup();
@@ -222,22 +223,52 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
                  ');
     }
 
-    public function newUserSession() {
+    public function newUserSession()
+    {
+        $this->log(__METHOD__.' - BEGIN', \CLogger::LEVEL_TRACE);
+
+        // Do nothing if this user is not AuthSAML type
+        $identity = $this->getEvent()->get('identity');
+        if ($identity->plugin != get_class($this)) {
+            $this->log(__METHOD__.' - Authentication not managed by this plugin', \CLogger::LEVEL_TRACE);
+            $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+            return;
+        }
+
+        /* unsubscribe from beforeHasPermission, else current event will be modified during check permissions */
+        $this->unsubscribe('beforeHasPermission');
 
         $ssp = $this->get_saml_instance();
+        $isAuthenticated = $ssp->isAuthenticated();
 
-        if ($ssp->isAuthenticated()) {
+        if (! $isAuthenticated) {
+            $sessionCleanupRequired = $this->get('simplesamlphp_cookie_session_storage', null, null, $this->settings['simplesamlphp_cookie_session_storage']['default']);
+            if ($sessionCleanupRequired){
+                \SimpleSAML\Session::getSessionFromRequest()->cleanup();
+            }
+            $this->setAuthFailure(self::ERROR_USERNAME_INVALID);
+            $this->log(__METHOD__.' - ERROR: User not authenticated, but was expected', \CLogger::LEVEL_ERROR);
+            $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+            return;
+        }
 
-            $sUser = $this->getUserName();
-            $name = $this->getUserCommonName();
-            $mail = $this->getUserMail();
+        $sUser = $this->getUserName();
+        $name = $this->getUserCommonName();
+        $mail = $this->getUserMail();
+        $usergroup = $this->getUserGroup();
 
-            $oUser = $this->api->getUserByName($sUser);
+        $sessionCleanupRequired = $this->get('simplesamlphp_cookie_session_storage', null, null, $this->settings['simplesamlphp_cookie_session_storage']['default']);
+        if ($sessionCleanupRequired){
+            \SimpleSAML\Session::getSessionFromRequest()->cleanup();
+        }
 
+
+        // Get LS user
+        $oUser = $this->api->getUserByName($sUser);
+
+        if (is_null($oUser)) {
             $auto_create_users = $this->get('auto_create_users', null, null, true);
-
-            if (is_null($oUser) and $auto_create_users) {
-
+            if ($auto_create_users) {
                 // Create new user
                 $oUser = new User;
                 $oUser->users_name = $sUser;
@@ -256,33 +287,44 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
                     $this->pluginManager->dispatchEvent(new PluginEvent('newUserLogin', $this));
 
                     $this->setAuthSuccess($oUser);
+
+                    $this->log(__METHOD__.' - User created: '.$oUser->uid, \CLogger::LEVEL_INFO);
                 } else {
-                    $this->setAuthFailure(self::ERROR_USERNAME_INVALID);
+                    $this->log(__METHOD__.' - ERROR: Could not add the user: '.$oUser->uid, \CLogger::LEVEL_ERROR);
+                    $this->setAuthFailure(self::ERROR_NOT_ADDED);
                 }
-            } elseif (is_null($oUser)) {
-                throw new CHttpException(401, gT("We are sorry but you do not have an account."));
             } else {
-
-                // *** Update user ***
-                $auto_update_users = $this->get('auto_update_users', null, null, true);
-
-                if ($auto_update_users) {
-                    $changes = array (
-                        'full_name' => $name,
-                        'email' => $mail,
-                    );
-
-                    User::model()->updateByPk($oUser->uid, $changes);
-                    $oUser = $this->api->getUserByName($sUser);
-                }
-
-                $this->setAuthSuccess($oUser);
+                $this->log(__METHOD__.' - ERROR: User creation not allowed: '.$oUser->uid, \CLogger::LEVEL_ERROR);
+                $this->setAuthFailure(self::ERROR_NOT_ADDED, gT("We are sorry but you do not have an account."));
             }
+        } else {
+
+            // If user cannot login via SAML: setAuthFailure
+            if (($oUser->uid == 1 && !$this->get('allowInitialUser'))
+                || !Permission::model()->hasGlobalPermission('auth_saml', 'read', $oUser->uid))
+            {
+                $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('SAML authentication method is not allowed for this user'));
+                return;
+            }
+
+            // *** Update user ***
+            $auto_update_users = $this->get('auto_update_users', null, null, $this->settings['auto_update_users']['default']);
+
+            if ($auto_update_users) {
+                $changes = array (
+                    'full_name' => $name,
+                    'email' => $mail,
+                );
+
+                User::model()->updateByPk($oUser->uid, $changes);
+                $oUser = $this->api->getUserByName($sUser);
+            }
+
+            $this->setAuthSuccess($oUser);
+            $this->log(__METHOD__.' - User updated: '.$oUser->uid, \CLogger::LEVEL_TRACE);
         }
-        $flag = $this->get('simplesamlphp_cookie_session_storage', null, null, true);
-        if ($flag){
-            $session = SimpleSAML_Session::getSessionFromRequest();
-            $session->cleanup();
+        $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+    }
         }
     }
 
@@ -294,13 +336,26 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
 
         if ($this->ssp == null) {
 
-            $simplesamlphp_path = $this->get('simplesamlphp_path', null, null, '/var/www/simplesamlphp');
+            $simplesamlphp_path = $this->get('simplesamlphp_path', null, null, $this->settings['simplesamlphp_path']['default']);
+
+            // To avoid __autoload conflicts, remove limesurvey autoloads temporarily
+            $autoload_functions = spl_autoload_functions();
+            foreach ($autoload_functions as $function) {
+                spl_autoload_unregister($function);
+            }
 
             require_once($simplesamlphp_path.'/lib/_autoload.php');
 
-            $saml_authsource = $this->get('saml_authsource', null, null, 'limesurvey');
+            $saml_authsource = $this->get('saml_authsource', null, null, $this->settings['saml_authsource']['default']);
 
-            $this->ssp = new \SimpleSAML\Auth\Simple($saml_authsource);
+            if (class_exists('\SimpleSAML\Auth\Simple')) {
+                $this->ssp = new \SimpleSAML\Auth\Simple($saml_authsource);
+            }
+
+            // To avoid __autoload conflicts, restote the limesurvey autoloads
+            foreach ($autoload_functions as $function) {
+                spl_autoload_register($function);
+            }
         }
 
         return $this->ssp;
@@ -324,45 +379,35 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
 
     public function getUserNameAttribute()
     {
-        $ssp = $this->get_saml_instance();
-        $attributes = $this->ssp->getAttributes();
-        if (!empty($attributes)) {
-            $saml_uid_mapping = $this->get('saml_uid_mapping', null, null, 'uid');
-            if (array_key_exists($saml_uid_mapping, $attributes) && !empty($attributes[$saml_uid_mapping])) {
-                $username = $attributes[$saml_uid_mapping][0];
-                return $username;
-            }
-        }
-        return false;
+        return $this->getSAMLAttribute($this->get('saml_uid_mapping', null, null, $this->settings['saml_uid_mapping']['default']));
     }
 
-    public function getUserCommonName() {
-
-        $name = '';
+    public function getSAMLAttribute(string $attribute_name)
+    {
+        $attributeValue = '';
         $ssp = $this->get_saml_instance();
         $attributes = $this->ssp->getAttributes();
+
         if (!empty($attributes)) {
-            $saml_name_mapping = $this->get('saml_name_mapping', null, null, 'cn');
-            if (array_key_exists($saml_name_mapping , $attributes) && !empty($attributes[$saml_name_mapping])) {
-                $name = $attributes[$saml_name_mapping][0];
+            if (array_key_exists($attribute_name, $attributes) && !empty($attributes[$attribute_name]))	{
+                $attributeValue = $attributes[$attribute_name][0];
             }
         }
-
-        return $name;
+        return $attributeValue;
     }
 
-    public function getUserMail() {
+    public function getUserCommonName()
+    {
+        return $this->getSAMLAttribute($this->get('saml_name_mapping', null, null, $this->settings['saml_name_mapping']['default']));
+    }
 
-        $mail = '';
-        $ssp = $this->get_saml_instance();
-        $attributes = $this->ssp->getAttributes();
-        if (!empty($attributes)) {
-            $saml_mail_mapping = $this->get('saml_mail_mapping', null, null, 'mail');
-            if (array_key_exists($saml_mail_mapping , $attributes) && !empty($attributes[$saml_mail_mapping])) {
-                $mail = $attributes[$saml_mail_mapping][0];
-            }
-        }
+    public function getUserMail()
+    {
+        return $this->getSAMLAttribute($this->get('saml_mail_mapping', null, null, $this->settings['saml_mail_mapping']['default']));
+    }
 
-        return $mail;
+    private function getUserGroup()
+    {
+        return $this->getSAMLAttribute($this->get('saml_group_mapping', null, null, $this->settings['saml_group_mapping']['default']));
     }
 }
