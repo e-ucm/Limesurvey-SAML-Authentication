@@ -94,7 +94,7 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         $this->storage = $this->get('storage_base', null, null, $this->settings['storage_base']['default']);
 
         $this->subscribe('getGlobalBasePermissions');
-
+        $this->subscribe('beforeHasPermission');
         $this->subscribe('beforeLogin');
         $this->subscribe('newUserSession');
         $this->subscribe('afterLogout');
@@ -123,6 +123,22 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
                 'img' => 'usergroup'
             ),
         ));
+    }
+
+    /**
+     * Validation of AuthPermission (for super-admin only)
+     * @return void
+     */
+    public function beforeHasPermission()
+    {
+        $oEvent = $this->getEvent();
+        if ($oEvent->get('sEntityName') != 'global' || $oEvent->get('sPermission') != 'auth_saml' || $oEvent->get('sCRUD') != 'read') {
+            return;
+        }
+        $iUserId = Permission::getUserId($oEvent->get('iUserID'));
+        if ($iUserId == 1) {
+            $oEvent->set('bPermission', (bool) $this->get('allowInitialUser'));
+        }
     }
 
     public function beforeLogin() {
