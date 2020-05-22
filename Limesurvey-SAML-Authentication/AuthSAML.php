@@ -81,6 +81,45 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             'label' => 'Logout Redirect URL',
             'default' => '/admin',
         ),
+        'auto_update_users' => array (
+            'type' => 'checkbox',
+            'label' => 'Auto update users',
+            'default' => true,
+        ),
+        'allowInitialUser' => array(
+            'type' => 'checkbox',
+            'label' => 'Allow initial user to login via SAML',
+        ),
+        'auto_create_labelsets' => array (
+            'type' => 'checkbox',
+            'label' => '- Permissions: Label Sets',
+            'default' => false,
+        ),
+        'auto_create_participant_panel' => array (
+            'type' => 'checkbox',
+            'label' => '- Permissions: Participant panel',
+            'default' => false,
+        ),
+        'auto_create_settings_plugins' => array (
+            'type' => 'checkbox',
+            'label' => '- Permissions: Settings & Plugins',
+            'default' => false,
+        ),
+        'auto_create_surveys' => array (
+            'type' => 'checkbox',
+            'label' => '- Permissions: Surveys',
+            'default' => true,
+        ),
+        'auto_create_templates' => array (
+            'type' => 'checkbox',
+            'label' => '- Permissions: Templates',
+            'default' => false,
+        ),
+        'auto_create_user_groups' => array (
+            'type' => 'checkbox',
+            'label' => '- Permissions: User groups',
+            'default' => false,
+        ),
         'simplesamlphp_logo_path' => array(
             'type' => 'logo',
             'label' => 'Plugin logo',
@@ -278,9 +317,7 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
                 $oUser->email = $mail;
 
                 if ($oUser->save()) {
-                    $permission = new Permission;
-
-                    Permission::model()->setGlobalPermission($oUser->uid, 'auth_saml');
+                    $this->assignUserPermissions($oUser->uid);
 
                     $oUser = $this->api->getUserByName($sUser);
 
@@ -325,6 +362,47 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         }
         $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
     }
+
+    private function assignUserPermissions(string $uid)
+    {
+        Permission::model()->setGlobalPermission($uid, 'auth_saml');
+
+        Permission::model()->insertSomeRecords(array ('uid' => $uid, 'permission' => getGlobalSetting("defaulttheme"), 'entity_id' => 0, 'entity' => 'template', 'read_p' => 1));
+
+        // Set permissions: Label Sets
+        $auto_create_labelsets = $this->get('auto_create_labelsets', null, null, $this->settings['auto_create_labelsets']['default']);
+        if ($auto_create_labelsets) {
+            Permission::model()->setGlobalPermission($uid, 'labelsets', array('create_p', 'read_p', 'update_p', 'delete_p', 'import_p', 'export_p'));
+        }
+
+        // Set permissions: Participant Panel
+        $auto_create_participant_panel = $this->get('auto_create_participant_panel', null, null, $this->settings['auto_create_participant_panel']['default']);
+        if ($auto_create_participant_panel) {
+            Permission::model()->setGlobalPermission($uid, 'participantpanel', array('create_p', 'read_p', 'update_p', 'delete_p', 'import_p', 'export_p'));
+        }
+
+        // Set permissions: Settings & Plugins
+        $auto_create_settings_plugins = $this->get('auto_create_settings_plugins', null, null, $this->settings['auto_create_settings_plugins']['default']);
+        if ($auto_create_settings_plugins) {
+            Permission::model()->setGlobalPermission($uid, 'settings', array('read_p', 'update_p', 'import_p'));
+        }
+
+        // Set permissions: surveys
+        $auto_create_surveys = $this->get('auto_create_surveys', null, null, $this->settings['auto_create_surveys']['default']);
+        if ($auto_create_surveys) {
+            Permission::model()->setGlobalPermission($uid, 'surveys', array('create_p', 'read_p', 'update_p', 'delete_p', 'export_p'));
+        }
+
+        // Set permissions: Templates
+        $auto_create_templates = $this->get('auto_create_templates', null, null, $this->settings['auto_create_templates']['default']);
+        if ($auto_create_templates)	{
+            Permission::model()->setGlobalPermission($uid, 'templates', array('create_p', 'read_p', 'update_p', 'delete_p', 'import_p', 'export_p'));
+        }
+
+        // Set permissions: User Groups
+        $auto_create_user_groups = $this->get('auto_create_user_groups', null, null, $this->settings['auto_create_user_groups']['default']);
+        if ($auto_create_user_groups) {
+            Permission::model()->setGlobalPermission($uid, 'usergroups', array('create_p', 'read_p', 'update_p', 'delete_p'));
         }
     }
 
