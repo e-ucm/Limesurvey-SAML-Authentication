@@ -14,7 +14,7 @@
 
 class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
 {
-    protected $storage = 'DbStorage';
+    protected $storage = 'LimeSurvey\PluginManager\DbStorage';
     protected $ssp = null;
 
     static protected $description = 'Core: SAML authentication';
@@ -68,7 +68,7 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         ),
         'authtype_base' => array(
             'type' => 'string',
-            'label' => 'Authtype base',
+            'label' => 'Authtype base to modify the login form. If null, then no modification is done.',
             'default' => 'Authdb',
         ),
         'storage_base' => array(
@@ -84,7 +84,7 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
     );
 
     public function init() {
-        $this->storage = $this->get('storage_base', null, null, 'DbStorage');
+        $this->storage = $this->get('storage_base', null, null, $this->settings['storage_base']['default']);
 
         $this->subscribe('getGlobalBasePermissions');
 
@@ -92,13 +92,13 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         $this->subscribe('newUserSession');
         $this->subscribe('afterLogout');
 
-        if (!$this->get('force_saml_login', null, null, false)) {
+        if (!$this->get('force_saml_login', null, null, $this->settings['force_saml_login']['default'])) {
             $this->subscribe('newLoginForm');
         }
     }
 
     /**
-     * Add AuthLDAP Permission to global Permission
+     * Add AuthSAML Permission to global Permission
      */
     public function getGlobalBasePermissions()
     {
@@ -121,21 +121,39 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
     public function beforeLogin() {
         $ssp = $this->get_saml_instance();
 
-        if ($this->get('force_saml_login', null, null, false)) {
+        $sessionCleanupNeeded = session_status() === PHP_SESSION_ACTIVE;
+        $sessionCleanupRequired = $this->get('simplesamlphp_cookie_session_storage', null, null, $this->settings['simplesamlphp_cookie_session_storage']['default']);
+
+        $ssp = $this->get_saml_instance();
+
+        if ($this->get('force_saml_login', null, null, $this->settings['force_saml_login']['default'])) {
             $ssp->requireAuth();
         }
 
-        if ($ssp->isAuthenticated()) {
+        $isAuthenticated = $ssp->isAuthenticated();
+
+        if ($isAuthenticated) {
+            $sUser = $this->getUserName();
+            if ($sessionCleanupNeeded && $sessionCleanupRequired) {
+                \SimpleSAML\Session::getSessionFromRequest()->cleanup();
+            }
             $this->setAuthPlugin();
             $this->newUserSession();
+        } else {
+            if ($sessionCleanupNeeded && $sessionCleanupRequired) {
+                \SimpleSAML\Session::getSessionFromRequest()->cleanup();
+            }
         }
     }
 
     public function afterLogout()
     {
         $ssp = $this->get_saml_instance();
-        $redirect = $this->get('logout_redirect', null, null, '/admin');
+
         if ($ssp->isAuthenticated()) {
+            $redirect = $this->get('logout_redirect', null, null, $this->settings['logout_redirect']['default']);
+            $redirect = Yii::app()->getController()->createUrl($redirect);
+
             Yii::app()->controller->redirect($ssp->getLogoutUrl($redirect));
             Yii::app()->end();
         }
