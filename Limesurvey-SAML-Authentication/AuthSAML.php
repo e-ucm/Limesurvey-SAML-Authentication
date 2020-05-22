@@ -102,6 +102,17 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         if (!$this->get('force_saml_login', null, null, $this->settings['force_saml_login']['default'])) {
             $this->subscribe('newLoginForm');
         }
+
+        $this->subscribe('beforeActivate');
+    }
+
+    public function beforeActivate()
+    {
+        if ( $this->get_saml_instance() === null ) {
+            $event = $this->getEvent();
+            $event->set('success', false);
+            $event->set('message', gT("SAML authentication failed: Simplesamlphp installation not available."));
+        }
     }
 
     /**
