@@ -46,6 +46,15 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             'label' => 'SAML attribute used as email',
             'default' => 'mail',
         ),
+        'saml_group_mapping' => array (
+            'type' => 'string',
+            'label' => 'SAML attributed used for groups',
+            'default' => 'member',
+        ),
+        'user_access_group' => array (
+            'type' => 'string',
+            'label' => 'User\'s group required to login using SAML',
+        ),
         'saml_name_mapping' => array(
             'type' => 'string',
             'label' => 'SAML attribute used as name',
@@ -301,6 +310,38 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             \SimpleSAML\Session::getSessionFromRequest()->cleanup();
         }
 
+
+        $user_access_group = $this->get('user_access_group');
+        if (!empty($user_access_group)) {
+            $user_access = false;
+            if ( is_array($usergroup) ) {
+                foreach ($usergroup as $key => $value) {
+                    // For example: "ls" or "ls,admin" or "ADLDS CN=G-APP-5650-LimeSurvey,OU=H-5600-APP,OU=TestAD,O=TestAD-AD"
+                    $group = $value;
+                    if (strpos($value, ',') !== false) {
+                        $group_array = explode(',', $value);
+                        $group = $group_array[0];
+                    }
+
+                    if (strpos($group, '=') !== false) {
+                        $group_array = explode('=', $group);
+                        $group = $group_array[1];
+                    }
+
+                    if ($group == $user_access_group) {
+                        $user_access = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!$user_access) {
+                $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('You have no access'));
+                $this->log(__METHOD__.' - ERROR', \CLogger::LEVEL_ERROR);
+                $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+                return;
+            }
+        }
 
         // Get LS user
         $oUser = $this->api->getUserByName($sUser);
