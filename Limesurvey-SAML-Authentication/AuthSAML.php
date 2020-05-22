@@ -81,6 +81,13 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             'label' => 'Logout Redirect URL',
             'default' => '/admin',
         ),
+        'simplesamlphp_logo_path' => array(
+            'type' => 'logo',
+            'label' => 'Plugin logo',
+            'path' => 'assets/SSO_LOGO.svg',
+            'alt' => 'SAML Logo',
+            'style' => 'width:128px',
+        ),
     );
 
     public function init() {
@@ -161,10 +168,31 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
 
     public function newLoginForm()
     {
-        $authtype_base = $this->get('authtype_base', null, null, 'Authdb');
+        $authtype_base = $this->get('authtype_base', null, null, $this->settings['authtype_base']['default']);
 
         $ssp = $this->get_saml_instance();
-        $this->getEvent()->getContent($authtype_base)->addContent('<li><center>Click on that button to initiate SAML Login<br><a href="'.$ssp->getLoginURL().'" title="SAML Login"><img src="'.Yii::app()->getConfig('imageurl').'/saml_logo.gif"></a></center><br></li>', 'prepend');
+        $loginUrl = $ssp->getLoginURL();
+
+        $pluginsettings = $this->getPluginSettings(true);
+        $imgUrl = $pluginsettings['simplesamlphp_logo_path']['path'];
+
+        if ($authtype_base != null) {
+            // This add the login button to the auth_base authentication method
+            $this->getEvent()
+                ->getContent($authtype_base)
+                ->addContent('<center>Click on that button to initiate SAML Login<br>
+                    <a href="' . $loginUrl . '" title="SAML Login">
+                    <img src="' .$imgUrl . '" width="100px"></a></center><br>
+                    ', LimeSurvey\PluginManager\PluginEventContent::PREPEND);
+        }
+
+        // This generates the "login form" for this plugin, basically a link to follow.
+        $this->getEvent()
+            ->getContent($this)
+            ->addContent('<center>Click on that button to initiate SAML Login<br>
+                <a href="' . $loginUrl . '" title="SAML Login">
+                 <img src="' . $imgUrl . '" width="100px"></a></center><br>
+                 ');
     }
 
     public function newUserSession() {
