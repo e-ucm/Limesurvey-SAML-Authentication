@@ -100,34 +100,34 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             'label' => 'Allow initial user to login via SAML',
         ),
         'auto_create_labelsets' => array (
-            'type' => 'checkbox',
+            'type' => 'string',
             'label' => '- Permissions: Label Sets',
-            'default' => false,
+            'default' => '',
         ),
         'auto_create_participant_panel' => array (
-            'type' => 'checkbox',
+            'type' => 'string',
             'label' => '- Permissions: Participant panel',
-            'default' => false,
+            'default' => '',
         ),
         'auto_create_settings_plugins' => array (
-            'type' => 'checkbox',
+            'type' => 'string',
             'label' => '- Permissions: Settings & Plugins',
-            'default' => false,
+            'default' => '',
         ),
         'auto_create_surveys' => array (
-            'type' => 'checkbox',
+            'type' => 'string',
             'label' => '- Permissions: Surveys',
-            'default' => true,
+            'default' => 'create_p,read_p,update_p,delete_p,export_p',
         ),
         'auto_create_templates' => array (
-            'type' => 'checkbox',
+            'type' => 'string',
             'label' => '- Permissions: Templates',
-            'default' => false,
+            'default' => 'create_p,read_p,update_p,delete_p,import_p,export_p',
         ),
         'auto_create_user_groups' => array (
-            'type' => 'checkbox',
+            'type' => 'string',
             'label' => '- Permissions: User groups',
-            'default' => false,
+            'default' => 'create_p,read_p,update_p,delete_p',
         ),
         'simplesamlphp_logo_path' => array(
             'type' => 'logo',
@@ -431,19 +431,19 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         // Set permissions: surveys
         $auto_create_surveys = $this->get('auto_create_surveys', null, null, $this->settings['auto_create_surveys']['default']);
         if ($auto_create_surveys) {
-            Permission::model()->setGlobalPermission($uid, 'surveys', array('create_p', 'read_p', 'update_p', 'delete_p', 'export_p'));
+            Permission::model()->setGlobalPermission($uid, 'surveys', explode(',', $auto_create_surveys));
         }
 
         // Set permissions: Templates
         $auto_create_templates = $this->get('auto_create_templates', null, null, $this->settings['auto_create_templates']['default']);
         if ($auto_create_templates)	{
-            Permission::model()->setGlobalPermission($uid, 'templates', array('create_p', 'read_p', 'update_p', 'delete_p', 'import_p', 'export_p'));
+            Permission::model()->setGlobalPermission($uid, 'templates', explode(',', $auto_create_templates));
         }
 
         // Set permissions: User Groups
         $auto_create_user_groups = $this->get('auto_create_user_groups', null, null, $this->settings['auto_create_user_groups']['default']);
         if ($auto_create_user_groups) {
-            Permission::model()->setGlobalPermission($uid, 'usergroups', array('create_p', 'read_p', 'update_p', 'delete_p'));
+            Permission::model()->setGlobalPermission($uid, 'usergroups', explode(',', $auto_create_user_groups));
         }
     }
 
