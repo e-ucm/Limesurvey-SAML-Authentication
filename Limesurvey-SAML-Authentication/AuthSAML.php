@@ -152,6 +152,7 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         }
 
         $this->subscribe('beforeActivate');
+        $this->subscribe('afterFailedLoginAttempt');
     }
 
     public function beforeActivate()
@@ -201,10 +202,11 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
     }
 
     public function beforeLogin() {
+        $this->log(__METHOD__.' - BEGIN', \CLogger::LEVEL_TRACE);
+
         $ssp = $this->get_saml_instance();
 
-        $sessionCleanupNeeded = session_status() === PHP_SESSION_ACTIVE;
-        $sessionCleanupRequired = $this->get('simplesamlphp_cookie_session_storage', null, null, $this->settings['simplesamlphp_cookie_session_storage']['default']);
+        $sessionCleanupNeeded = $this->isSessionCleanupNeeded();
 
         $ssp = $this->get_saml_instance();
 
@@ -215,35 +217,104 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         $isAuthenticated = $ssp->isAuthenticated();
 
         if ($isAuthenticated) {
-            $sUser = $this->getUserName();
-            if ($sessionCleanupNeeded && $sessionCleanupRequired) {
-                \SimpleSAML\Session::getSessionFromRequest()->cleanup();
-            }
+            $sUser = $this->getUserNameSAML();
+            // must be done as early as possible and before touching LS session
+            $this->doSessionCleanup($sessionCleanupNeeded);
 
-            $this->setUsername($sUser);
-            $this->setAuthPlugin();
-        } else {
-            if ($sessionCleanupNeeded && $sessionCleanupRequired) {
-                \SimpleSAML\Session::getSessionFromRequest()->cleanup();
+            $showingError = $this->getFlash('showing_error', false);
+            $this->log(__METHOD__.' - showingError: '.($showingError ? 'true' : 'false'), \CLogger::LEVEL_TRACE);
+            if (! $showingError && ! FailedLoginAttempt::model()->isLockedOut() ) {
+
+                $this->log(__METHOD__.' - sUser: '.$sUser, \CLogger::LEVEL_TRACE);
+
+                $this->setUsername($sUser);
+                $this->setAuthPlugin();
             }
+        } else {
+            // Do not want to move outside because session cleanup will be called twice in some cases
+            $this->doSessionCleanup($sessionCleanupNeeded);
         }
+
+        $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+    }
+
+    private function isSessionCleanupNeeded()
+    {
+        $sessionCleanupNeeded = session_status() === PHP_SESSION_ACTIVE;
+        $sessionCleanupRequired = $this->get('simplesamlphp_cookie_session_storage', null, null, $this->settings['simplesamlphp_cookie_session_storage']['default']);
+        return $sessionCleanupNeeded && $sessionCleanupRequired;
+    }
+
+    private function doSessionCleanup($doIt=false)
+    {
+        if ($doIt) {
+            \SimpleSAML\Session::getSessionFromRequest()->cleanup();
+        }
+    }
+
+    private function getFlash($key, $defaultValue= null)
+    {
+        $this->log(__METHOD__.' - BEGIN', \CLogger::LEVEL_TRACE);
+
+        $fqKey = 'AuthSAML.'.$key;
+        $result = Yii::app()->session->remove($fqKey);
+        if ($result === null) {
+            $result = $defaultValue;
+        }
+
+        $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+
+        return $result;
+    }
+
+    private function setFlash($key, $value, $defaultValue = null)
+    {
+        $this->log(__METHOD__.' - BEGIN', \CLogger::LEVEL_TRACE);
+
+        $fqKey = 'AuthSAML.'.$key;
+
+        if ($value === $defaultValue) {
+            Yii::app()->session->remove($fqKey);
+        } else {
+            Yii::app()->session->add($fqKey, $value);
+        }
+
+        $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+
+    }
+
+    public function afterFailedLoginAttempt()
+    {
+        $this->log(__METHOD__.' - BEGIN', \CLogger::LEVEL_TRACE);
+
+        $this->setFlash('showing_error', true);
+
+        $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
     }
 
     public function afterLogout()
     {
+        $this->log(__METHOD__.' - BEGIN', \CLogger::LEVEL_TRACE);
+
         $ssp = $this->get_saml_instance();
 
         if ($ssp->isAuthenticated()) {
             $redirect = $this->get('logout_redirect', null, null, $this->settings['logout_redirect']['default']);
             $redirect = Yii::app()->getController()->createUrl($redirect);
 
+            $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+
             Yii::app()->controller->redirect($ssp->getLogoutUrl($redirect));
             Yii::app()->end();
         }
+
+        $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
     }
 
     public function newLoginForm()
     {
+        $this->log(__METHOD__.' - BEGIN', \CLogger::LEVEL_TRACE);
+
         $authtype_base = $this->get('authtype_base', null, null, $this->settings['authtype_base']['default']);
 
         $ssp = $this->get_saml_instance();
@@ -269,6 +340,8 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
                 <a href="' . $loginUrl . '" title="SAML Login">
                  <img src="' . $imgUrl . '" width="100px"></a></center><br>
                  ');
+
+        $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
     }
 
     public function newUserSession()
@@ -290,24 +363,69 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         $isAuthenticated = $ssp->isAuthenticated();
 
         if (! $isAuthenticated) {
-            $sessionCleanupRequired = $this->get('simplesamlphp_cookie_session_storage', null, null, $this->settings['simplesamlphp_cookie_session_storage']['default']);
-            if ($sessionCleanupRequired){
-                \SimpleSAML\Session::getSessionFromRequest()->cleanup();
-            }
+
+            $this->doSessionCleanup($this->isSessionCleanupNeeded());
+
             $this->setAuthFailure(self::ERROR_USERNAME_INVALID);
+
             $this->log(__METHOD__.' - ERROR: User not authenticated, but was expected', \CLogger::LEVEL_ERROR);
             $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
             return;
         }
 
-        $sUser = $this->getUserName();
+        $samlConfigurationError = isset(Yii::app()->session['AuthSAML_configuration_error']);
+        if ($samlConfigurationError){
+
+            $this->doSessionCleanup($this->isSessionCleanupNeeded());
+
+            $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('Limesurvey is not configured properly to use the SSO'));
+
+            $this->log(__METHOD__.' - ERROR: Limesurvey is not configured properly to use the SSO', \CLogger::LEVEL_ERROR);
+            $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+            return;
+        }
+
+        $sUser = $this->getUserNameSAML();
         $name = $this->getUserCommonName();
         $mail = $this->getUserMail();
         $usergroup = $this->getUserGroup();
 
-        $sessionCleanupRequired = $this->get('simplesamlphp_cookie_session_storage', null, null, $this->settings['simplesamlphp_cookie_session_storage']['default']);
-        if ($sessionCleanupRequired){
-            \SimpleSAML\Session::getSessionFromRequest()->cleanup();
+        $this->doSessionCleanup($this->isSessionCleanupNeeded());
+
+        if (empty($sUser)) {
+            $attributeName = $this->getUserNameSAMLAttributeName();
+
+            Yii::app()->session['AuthSAML_configuration_error'] = true;
+
+            $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('Required SAML attribute missing'));
+
+            $this->log(__METHOD__." - ERROR: Missing required attribute '$attributeName' in SAML response.", \CLogger::LEVEL_ERROR);
+            $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+            return;
+        }
+
+        if (empty($name)) {
+            $attributeName = $this->getUserCommonNameSAMLAttributeName();
+
+            Yii::app()->session['AuthSAML_configuration_error'] = true;
+
+            $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('Required SAML attribute missing'));
+
+            $this->log(__METHOD__." - ERROR: Missing required attribute '$attributeName' in SAML response.", \CLogger::LEVEL_ERROR);
+            $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+            return;
+        }
+
+        if (empty($mail)) {
+            $attributeName = $this->getUserMailSAMLAttributeName();
+
+            Yii::app()->session['AuthSAML_configuration_error'] = true;
+
+            $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('Required SAML attribute missing'));
+
+            $this->log(__METHOD__." - ERROR: Missing required attribute '$attributeName' in SAML response.", \CLogger::LEVEL_ERROR);
+            $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+            return;
         }
 
 
@@ -336,9 +454,12 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             }
 
             if (!$user_access) {
+
                 $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('You have no access'));
+
                 $this->log(__METHOD__.' - ERROR', \CLogger::LEVEL_ERROR);
                 $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+
                 return;
             }
         }
@@ -369,6 +490,7 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
                     $this->log(__METHOD__.' - User created: '.$oUser->uid, \CLogger::LEVEL_INFO);
                 } else {
                     $this->log(__METHOD__.' - ERROR: Could not add the user: '.$oUser->uid, \CLogger::LEVEL_ERROR);
+
                     $this->setAuthFailure(self::ERROR_NOT_ADDED);
                 }
             } else {
@@ -381,6 +503,9 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
             if (($oUser->uid == 1 && !$this->get('allowInitialUser'))
                 || !Permission::model()->hasGlobalPermission('auth_saml', 'read', $oUser->uid))
             {
+                $this->log(__METHOD__.' - ERROR: authentication method is not allowed for this user: '.$oUser->uid, \CLogger::LEVEL_ERROR);
+                $this->log(__METHOD__.' - END', \CLogger::LEVEL_TRACE);
+
                 $this->setAuthFailure(self::ERROR_AUTH_METHOD_INVALID, gT('SAML authentication method is not allowed for this user'));
                 return;
             }
@@ -480,25 +605,14 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
         return $this->ssp;
     }
 
-    /**
-     * Get Userdata from SAML Attributes
-     * @return void
-     */
-    public function getUserName() {
-
-        if ($this->_username == null) {
-            $username = $this->getUserNameAttribute();
-            if ($username !== false) {
-                $this->setUsername($username);
-            }
-        }
-
-        return $this->_username;
+    public function getUserNameSAML()
+    {
+        return $this->getSAMLAttribute($this->getUserNameSAMLAttributeName());
     }
 
-    public function getUserNameAttribute()
+    public function getUserNameSAMLAttributeName()
     {
-        return $this->getSAMLAttribute($this->get('saml_uid_mapping', null, null, $this->settings['saml_uid_mapping']['default']));
+        return $this->get('saml_uid_mapping', null, null, $this->settings['saml_uid_mapping']['default']);
     }
 
     public function getSAMLAttribute(string $attribute_name)
@@ -517,16 +631,31 @@ class AuthSAML extends LimeSurvey\PluginManager\AuthPluginBase
 
     public function getUserCommonName()
     {
-        return $this->getSAMLAttribute($this->get('saml_name_mapping', null, null, $this->settings['saml_name_mapping']['default']));
+        return $this->getSAMLAttribute($this->getUserCommonNameSAMLAttributeName());
+    }
+
+    private function getUserCommonNameSAMLAttributeName()
+    {
+        return $this->get('saml_name_mapping', null, null, $this->settings['saml_name_mapping']['default']);
     }
 
     public function getUserMail()
     {
-        return $this->getSAMLAttribute($this->get('saml_mail_mapping', null, null, $this->settings['saml_mail_mapping']['default']));
+        return $this->getSAMLAttribute($this->getUserMailSAMLAttributeName());
+    }
+
+    private function getUserMailSAMLAttributeName()
+    {
+        return $this->get('saml_mail_mapping', null, null, $this->settings['saml_mail_mapping']['default']);
     }
 
     private function getUserGroup()
     {
-        return $this->getSAMLAttribute($this->get('saml_group_mapping', null, null, $this->settings['saml_group_mapping']['default']));
+        return $this->getSAMLAttribute($this->getUserGroupSAMLAttributeName());
+    }
+
+    private function getUserGroupSAMLAttributeName()
+    {
+        return $this->get('saml_group_mapping', null, null, $this->settings['saml_group_mapping']['default']);
     }
 }
