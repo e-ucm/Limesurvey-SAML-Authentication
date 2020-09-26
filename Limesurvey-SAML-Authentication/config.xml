@@ -4,10 +4,10 @@
         <name>AuthSAML</name>
         <type>plugin</type>
         <creationDate>2018-08-14</creationDate>
-        <last_update>2020-09-15</last_update>
+        <last_update>2020-09-26</last_update>
         <author>Frank Niesten</author>
         <authorUrl>https://github.com/e-ucm/Limesurvey-SAML-Authentication.git</authorUrl>
-        <version>0.2.0-rc1</version>
+        <version>0.2.0-rc2</version>
         <license>GPL 3.0</license>
         <description><![CDATA[Enables SAML2 authentication]]></description>
     </metadata>
