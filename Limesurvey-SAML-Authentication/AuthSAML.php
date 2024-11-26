@@ -1,7 +1,7 @@
 <?php
 
 /*
- * LimeSurvey Auhtnetication Plugin for Limesurvey 3.14+
+ * LimeSurvey Auhtnetication Plugin for Limesurvey 4.3.X
  * Auhtor: Frank Niesten
  * License: GNU General Public License v3.0
  *
